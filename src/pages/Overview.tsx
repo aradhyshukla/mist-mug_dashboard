@@ -2,7 +2,7 @@
 // Overview page: cafe identity, product catalogue, quick upload,
 // recent activity, and live sales snapshot from imported data.
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Search,
@@ -137,20 +137,6 @@ export default function Overview() {
     else await activateProduct(id as unknown as ProductId)
   }
 
-  if (!ready) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <EmptyState
-          icon={Upload}
-          title="Loading dashboard…"
-          description={
-            error ? `Unable to load: ${error}` : "Preparing Mist & Mug. Please wait."
-          }
-        />
-      </div>
-    )
-  }
-
   // Load recent uploads and transaction lines for the snapshot
   const [recentUploads, setRecentUploads] = useState<UploadBatch[]>([])
   const [snapshotMetrics, setSnapshotMetrics] = useState<{
@@ -182,12 +168,23 @@ export default function Overview() {
     }
   }
 
-  // Load snapshot when data changes (simple approach - reload on mount)
-  // In a full implementation, we'd use a pub/sub or React Query
-  const [loaded, setLoaded] = useState(false)
-  if (!loaded) {
+  // Load snapshot once when data is ready
+  useEffect(() => {
     void loadSnapshot()
-    setLoaded(true)
+  }, [])
+
+  if (!ready) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <EmptyState
+          icon={Upload}
+          title="Loading dashboard…"
+          description={
+            error ? `Unable to load: ${error}` : "Preparing Mist & Mug. Please wait."
+          }
+        />
+      </div>
+    )
   }
 
   const formatCurrency = (n: number) =>
