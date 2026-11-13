@@ -84,7 +84,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
           <div className="p-4 border-t border-border">
             <div className="text-xs text-paper/60 leading-relaxed">
-              Phase 1 · Product catalogue &amp; sales upload shell
+              Phase 2 · Sales import &amp; analytics engine
             </div>
           </div>
         </div>

@@ -1,59 +1,149 @@
-﻿import { useState } from "react"
+﻿// Mist & Mug — Sales Dashboard
+// Sales Analytics page: real analytics from imported data.
+
+import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
-import { Upload, BarChart3, Clock, Activity, PieChart, Calendar } from "lucide-react"
+import { Upload } from "lucide-react"
 import { Button } from "../components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs"
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
+import { Card, CardHeader } from "../components/ui/card"
 import { Separator } from "../components/ui/separator"
 import { SectionHeader } from "../components/common/SectionHeader"
-import { EMPTY_ICONS, EmptyState } from "../components/common/EmptyState"
-import { MetricCard } from "../components/common/MetricCard"
+import { KPICards } from "../components/analytics/KPICards"
+import { RevenueTrendChart } from "../components/analytics/RevenueTrendChart"
+import { TopProductsChart } from "../components/analytics/TopProductsChart"
+import { WeekdayWeekendChart } from "../components/analytics/WeekdayWeekendChart"
+import { HourlyChart } from "../components/analytics/HourlyChart"
+import { ProductPerformanceTable } from "../components/analytics/ProductPerformanceTable"
+import { useAnalytics } from "../hooks/useAnalytics"
+import { loadAllLines } from "../lib/analytics"
+import { getWeekStart, getMonthEnd, getAvailableYears } from "../lib/date-utils"
+import type { ReportingPeriodType } from "../types"
 
-const PERIODS = [
+const PERIODS: Array<{ value: ReportingPeriodType; label: string }> = [
   { value: "week", label: "Week" },
   { value: "month", label: "Month" },
   { value: "year", label: "Year" },
   { value: "alltime", label: "All Time" },
 ]
 
-// Each analytics card is a visual shell only. No calculations are performed
-// in Phase 1; real data arrives from uploaded batches in Phase 2.
-const PLACEHOLDERS = [
-  {
-    title: "Revenue Trend",
-    icon: Activity,
-    description: "Daily revenue over the selected reporting period.",
-  },
-  {
-    title: "Top-Selling Products",
-    icon: BarChart3,
-    description: "Ranked by units sold within the period.",
-  },
-  {
-    title: "Peak Sales Hours",
-    icon: Clock,
-    description: "Hour-of-day distribution of orders.",
-  },
-  {
-    title: "Weekday vs Weekend",
-    icon: Calendar,
-    description: "Comparison of weekend and weekday sales.",
-  },
-  {
-    title: "Product Performance",
-    icon: PieChart,
-    description: "Revenue share by product category.",
-  },
-  {
-    title: "Sales Breakdown",
-    icon: BarChart3,
-    description: "Payment and channel breakdown (when available).",
-  },
-]
-
 export default function SalesAnalytics() {
   const navigate = useNavigate()
-  const [period, setPeriod] = useState<"week" | "month" | "year" | "alltime">("week")
+  const [period, setPeriod] = useState<ReportingPeriodType>("week")
+  const [periodOptions, setPeriodOptions] = useState<Array<{
+    id: string
+    label: string
+    startDate: string
+    endDate: string
+  }>>([])
+  const [selectedOption, setSelectedOption] = useState<{
+    id: string
+    label: string
+    startDate: string
+    endDate: string
+  } | null>(null)
+
+  // Load all lines to determine available dates and generate period options
+  useEffect(() => {
+    let mounted = true
+    loadAllLines().then((lines) => {
+      if (!mounted) return
+      const dates = lines.map((l) => l.date)
+      const years = getAvailableYears(dates)
+
+      const opts: Array<{
+        id: string
+        label: string
+        startDate: string
+        endDate: string
+      }> = []
+
+      if (period === "alltime" && dates.length > 0) {
+        const sorted = [...dates].sort()
+        opts.push({
+          id: "alltime",
+          label: "All Time",
+          startDate: sorted[0],
+          endDate: sorted[sorted.length - 1],
+        })
+      } else if (period === "year") {
+        for (const y of years) {
+          opts.push({
+            id: `year_${y}`,
+            label: String(y),
+            startDate: `${y}-01-01`,
+            endDate: `${y}-12-31`,
+          })
+        }
+      } else if (period === "month") {
+        for (const y of years) {
+          for (let m = 0; m < 12; m++) {
+            const start = `${y}-${String(m + 1).padStart(2, "0")}-01`
+            opts.push({
+              id: `month_${y}_${m}`,
+              label: new Date(y, m, 1).toLocaleString("en-US", {
+                month: "long",
+                year: "numeric",
+              }),
+              startDate: start,
+              endDate: getMonthEnd(start),
+            })
+          }
+        }
+      } else if (period === "week" && dates.length > 0) {
+        const sorted = [...dates].sort()
+        const firstStart = getWeekStart(sorted[0])
+        const lastStart = getWeekStart(sorted[sorted.length - 1])
+        let current = new Date(firstStart)
+        const last = new Date(lastStart)
+        while (current <= last) {
+          const ws = current.toISOString().slice(0, 10)
+          opts.push({
+            id: `week_${ws}`,
+            label: `Week of ${ws}`,
+            startDate: ws,
+            endDate: new Date(current.getTime() + 6 * 24 * 60 * 60 * 1000)
+              .toISOString()
+              .slice(0, 10),
+          })
+          current.setDate(current.getDate() + 7)
+        }
+      }
+
+      setPeriodOptions(opts)
+      if (opts.length > 0 && !selectedOption) {
+        setSelectedOption(opts[0])
+      }
+    })
+    return () => {
+      mounted = false
+    }
+  }, [period, selectedOption])
+
+  const startDate = selectedOption?.startDate ?? ""
+  const endDate = selectedOption?.endDate ?? ""
+
+  const {
+    loading,
+    error,
+    metrics,
+    dailyTrend,
+    weeklyBreakdown,
+    monthlyTrend,
+    yearlyTrend,
+    revenueByHour,
+    topProductsByRevenue,
+    weekdayWeekend,
+  } = useAnalytics({ type: period, startDate, endDate })
+
+  const trendData =
+    period === "week"
+      ? dailyTrend
+      : period === "month"
+      ? weeklyBreakdown
+      : period === "year"
+      ? monthlyTrend
+      : yearlyTrend
 
   return (
     <div className="space-y-8 p-6 md:p-8 lg:p-10 max-w-7xl mx-auto">
@@ -67,25 +157,26 @@ export default function SalesAnalytics() {
             periods.
           </p>
         </div>
-        <Button
-          onClick={() => navigate("/upload-data")}
-          className="lg:ml-auto"
-          variant="outline"
-        >
-          <Upload className="h-4 w-4 mr-2" aria-hidden="true" />
-          Upload Sales Data
-        </Button>
+        <div className="flex gap-3">
+          <Button onClick={() => navigate("/overview")} variant="outline">
+            Back to Overview
+          </Button>
+          <Button onClick={() => navigate("/upload-data")} variant="outline">
+            <Upload className="h-4 w-4 mr-2" aria-hidden="true" />
+            Upload Sales Data
+          </Button>
+        </div>
       </div>
 
       {/* Period selector */}
       <Card className="border-border">
         <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3">
-          <CardTitle className="text-sm font-semibold text-wood/70 uppercase tracking-wider">
+          <span className="text-sm font-semibold text-wood/70 uppercase tracking-wider">
             Reporting period
-          </CardTitle>
+          </span>
           <Tabs
             value={period}
-            onValueChange={setPeriod as (value: string) => void}
+            onValueChange={(value) => setPeriod(value as ReportingPeriodType)}
             className="w-full sm:w-auto"
           >
             <TabsList>
@@ -99,54 +190,71 @@ export default function SalesAnalytics() {
         </CardHeader>
       </Card>
 
-      {/* Snapshot metrics (empty until data imported) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard title="Revenue" value="â€”" subtitle="INR Â· selected period" />
-        <MetricCard title="Orders" value="â€”" subtitle="Count" />
-        <MetricCard title="Items Sold" value="â€”" subtitle="Units" />
-        <MetricCard title="Avg. Order Value" value="â€”" subtitle="INR" />
-      </div>
+      {/* Specific period selector */}
+      {periodOptions.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-2">
+          {periodOptions.map((opt) => (
+            <Button
+              key={opt.id}
+              onClick={() => setSelectedOption(opt)}
+              variant={selectedOption?.id === opt.id ? "default" : "outline"}
+              size="sm"
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </div>
+      )}
 
-      <Separator className="my-6" />
+      {loading ? (
+        <div className="flex h-96 items-center justify-center">
+          <p className="text-sm text-wood/60">Loading analytics…</p>
+        </div>
+      ) : error ? (
+        <div className="p-8 text-center text-brick/80">
+          <p>Error loading analytics: {error}</p>
+        </div>
+      ) : (
+        <>
+          <SectionHeader
+            title="Analytics Overview"
+            description="All figures are calculated from imported transaction data using actual historical prices."
+          />
 
-      {/* Analytics placeholders */}
-      <SectionHeader
-        title="Analytics Views"
-        description="Select a reporting period above. Each view populates once sales data has been imported."
-      />
-      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-4">
-        {PLACEHOLDERS.map((ph) => {
-          const Icon = ph.icon
-          return (
-            <Card key={ph.title} className="border-border">
-              <CardContent className="p-6">
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-cream/50 text-wood mb-3">
-                  <Icon className="h-5 w-5" aria-hidden="true" />
-                </div>
-                <h3 className="font-serif font-semibold text-ink">{ph.title}</h3>
-                <p className="mt-2 text-xs text-wood/60 leading-relaxed">
-                  {ph.description}
-                </p>
-                <div className="mt-6 h-24 w-full rounded-lg border border-dashed border-border bg-cream/30 flex items-center justify-center">
-                  <EmptyState
-                    icon={EMPTY_ICONS.activity}
-                    title="No data"
-                    description="Import sales data to populate"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          )
-        })}
-      </div>
+          <KPICards metrics={metrics} />
 
-      <p className="mt-6 text-xs text-wood/50 max-w-2xl">
-        No analytical calculations are performed in Phase 1. All views above are
-        layout placeholders. Figures will be computed from uploaded batches once
-        the import engine lands in Phase 2.
-      </p>
+          <Separator className="my-6" />
+
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <RevenueTrendChart
+              data={trendData}
+              title={
+                period === "week"
+                  ? "Daily Revenue Trend"
+                  : period === "month"
+                  ? "Weekly Revenue Breakdown"
+                  : period === "year"
+                  ? "Monthly Revenue Trend"
+                  : "Yearly Revenue Trend"
+              }
+            />
+            <TopProductsChart
+              data={topProductsByRevenue}
+              rankBy="revenue"
+              title="Top-Selling Products (by Revenue)"
+            />
+            <WeekdayWeekendChart data={weekdayWeekend} />
+            <HourlyChart data={revenueByHour} />
+            <ProductPerformanceTable data={topProductsByRevenue} />
+          </div>
+
+          <p className="mt-6 text-xs text-wood/50 max-w-2xl">
+            Import sales data via the Upload Data page to populate analytics.
+            All calculations use actual historical transaction prices — no
+            figures are invented.
+          </p>
+        </>
+      )}
     </div>
   )
 }
-
-

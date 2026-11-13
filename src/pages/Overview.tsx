@@ -1,4 +1,8 @@
-﻿import { useState } from "react"
+﻿// Mist & Mug — Sales Dashboard
+// Overview page: cafe identity, product catalogue, quick upload,
+// recent activity, and live sales snapshot from imported data.
+
+import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Search,
@@ -8,6 +12,7 @@ import {
   CheckCircle2,
   Coffee,
   Plus,
+  Upload,
 } from "lucide-react"
 import { Button } from "../components/ui/button"
 import {
@@ -33,15 +38,14 @@ import {
 } from "../components/ui/dialog"
 import { Label } from "../components/ui/label"
 import { Textarea } from "../components/ui/textarea"
-import {
-  EMPTY_ICONS,
-  EmptyState,
-} from "../components/common/EmptyState"
+import { EmptyState } from "../components/common/EmptyState"
 import { MetricCard } from "../components/common/MetricCard"
 import { useProducts } from "../hooks/useProducts"
 import { useDatabase } from "../hooks/useDatabase"
 import { cn } from "../lib/utils"
-import type { Product, ProductId, ProductInput } from "../types"
+import { db } from "../lib/db"
+import type { Product, ProductId, ProductInput, UploadBatch } from "../types"
+import { calculateMetrics } from "../lib/analytics"
 
 const CATEGORIES = ["All", "Coffee", "Tea", "Bakery", "Snacks", "Cold Beverages"]
 
@@ -137,8 +141,8 @@ export default function Overview() {
     return (
       <div className="flex h-screen items-center justify-center">
         <EmptyState
-          icon={EMPTY_ICONS.upload}
-          title="Loading dashboardâ€¦"
+          icon={Upload}
+          title="Loading dashboard…"
           description={
             error ? `Unable to load: ${error}` : "Preparing Mist & Mug. Please wait."
           }
@@ -146,6 +150,48 @@ export default function Overview() {
       </div>
     )
   }
+
+  // Load recent uploads and transaction lines for the snapshot
+  const [recentUploads, setRecentUploads] = useState<UploadBatch[]>([])
+  const [snapshotMetrics, setSnapshotMetrics] = useState<{
+    revenue: number
+    orders: number
+    itemsSold: number
+    averageOrderValue: number
+  } | null>(null)
+
+  const loadSnapshot = async () => {
+    const batches = await db.uploadBatches
+      .orderBy("uploadedAt")
+      .reverse()
+      .limit(5)
+      .toArray()
+    setRecentUploads(batches)
+
+    const lines = await db.transactionLines.toArray()
+    if (lines.length > 0) {
+      const m = calculateMetrics(lines)
+      setSnapshotMetrics({
+        revenue: m.revenue,
+        orders: m.orders,
+        itemsSold: m.itemsSold,
+        averageOrderValue: m.averageOrderValue,
+      })
+    } else {
+      setSnapshotMetrics(null)
+    }
+  }
+
+  // Load snapshot when data changes (simple approach - reload on mount)
+  // In a full implementation, we'd use a pub/sub or React Query
+  const [loaded, setLoaded] = useState(false)
+  if (!loaded) {
+    void loadSnapshot()
+    setLoaded(true)
+  }
+
+  const formatCurrency = (n: number) =>
+    `₹${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 
   return (
     <div className="space-y-8 p-6 md:p-8 lg:p-10 max-w-7xl mx-auto">
@@ -168,7 +214,7 @@ export default function Overview() {
           <div className="flex items-center gap-3 text-sm text-ink/70">
             <div className="flex items-center gap-1">
               <div className="h-2 w-2 rounded-full bg-forest" aria-hidden="true" />
-              <span>Open Â· 2,005 M Â· Mussoorie</span>
+              <span>Open · 2,005 M · Mussoorie</span>
             </div>
           </div>
         </div>
@@ -194,6 +240,7 @@ export default function Overview() {
             onClick={() => navigate("/upload-data")}
             className="lg:ml-auto"
           >
+            <Upload className="h-4 w-4 mr-2" aria-hidden="true" />
             Upload Weekly Sales
           </Button>
         </div>
@@ -206,8 +253,8 @@ export default function Overview() {
               No sales data uploaded yet
             </CardTitle>
             <p className="mt-2 text-sm text-wood/60">
-              Click the button above to go to the Upload Data page. Actual file
-              importing becomes available in Phase 2.
+              Click the button above to go to the Upload Data page. Imported
+              data powers Sales Analytics and Performance Tracker.
             </p>
             <Button
               onClick={() => navigate("/upload-data")}
@@ -241,7 +288,7 @@ export default function Overview() {
                 aria-hidden="true"
               />
               <Input
-                placeholder="Search productsâ€¦"
+                placeholder="Search products…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-9"
@@ -278,7 +325,7 @@ export default function Overview() {
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState
-            icon={EMPTY_ICONS.data}
+            icon={Upload}
             title="No products match your filters"
             description={
               search || categoryFilter !== "All"
@@ -348,7 +395,7 @@ export default function Overview() {
                       {product.category}
                     </td>
                     <td className="px-4 py-4 text-right font-serif font-medium text-ink">
-                      â‚¹{product.currentPrice.toLocaleString()}
+                      ₹{product.currentPrice.toLocaleString()}
                     </td>
                     <td className="px-4 py-4">
                       <span
@@ -417,15 +464,77 @@ export default function Overview() {
             </p>
           </div>
         </div>
-        <EmptyState
-          icon={EMPTY_ICONS.upload}
-          title="No uploads yet"
-          description={
-            "Once you upload a sales file, its date, reporting period and status will appear here."
-          }
-          actionLabel="Upload Weekly Sales"
-          onAction={() => navigate("/upload-data")}
-        />
+        {recentUploads.length === 0 ? (
+          <EmptyState
+            icon={Upload}
+            title="No uploads yet"
+            description={
+              "Once you upload a sales file, its date, reporting period and status will appear here."
+            }
+            actionLabel="Upload Weekly Sales"
+            onAction={() => navigate("/upload-data")}
+          />
+        ) : (
+          <div className="overflow-x-auto border border-border rounded-lg">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-cream/50">
+                  <th className="text-left px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                    File
+                  </th>
+                  <th className="text-left px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                    Uploaded
+                  </th>
+                  <th className="text-left px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                    Period
+                  </th>
+                  <th className="text-center px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                    Accepted
+                  </th>
+                  <th className="text-center px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                    Rejected
+                  </th>
+                  <th className="text-right px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {recentUploads.map((batch) => (
+                  <tr key={batch.id}>
+                    <td className="px-4 py-3 text-ink/80">
+                      {batch.fileName}
+                    </td>
+                    <td className="px-4 py-3 text-ink/80 text-sm">
+                      {new Date(batch.uploadedAt).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-ink/80 text-sm">
+                      {batch.reportingPeriodLabel || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-center text-ink/80 text-sm">
+                      {batch.acceptedRows}
+                    </td>
+                    <td className="px-4 py-3 text-center text-ink/80 text-sm">
+                      {batch.rejectedRows}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold",
+                          batch.status === "imported"
+                            ? "bg-forest/10 text-forest"
+                            : "bg-wood/10 text-wood"
+                        )}
+                      >
+                        {batch.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* Quick sales snapshot */}
@@ -436,27 +545,56 @@ export default function Overview() {
               Quick Sales Snapshot
             </h2>
             <p className="mt-1 text-sm text-wood/60">
-              Key figures appear here once sales data is imported.
+              Live figures from imported sales data.
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <MetricCard title="Revenue" value="â€”" subtitle="Total sales (INR)" />
-          <MetricCard title="Orders" value="â€”" subtitle="Number of orders" />
-          <MetricCard title="Items Sold" value="â€”" subtitle="Line items sold" />
-          <MetricCard title="Avg. Order Value" value="â€”" subtitle="INR per order" />
-        </div>
-        <p className="mt-3 text-xs text-wood/50">
-          Values are intentionally empty until sales data is uploaded. No
-          figures are invented.
-        </p>
+        {snapshotMetrics ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <MetricCard
+              title="Revenue"
+              value={formatCurrency(snapshotMetrics.revenue)}
+              subtitle="Total sales (INR)"
+            />
+            <MetricCard
+              title="Orders"
+              value={snapshotMetrics.orders.toLocaleString()}
+              subtitle="Unique transactions"
+            />
+            <MetricCard
+              title="Items Sold"
+              value={snapshotMetrics.itemsSold.toLocaleString()}
+              subtitle="Line items sold"
+            />
+            <MetricCard
+              title="Avg. Order Value"
+              value={formatCurrency(snapshotMetrics.averageOrderValue)}
+              subtitle="INR per order"
+            />
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <MetricCard title="Revenue" value="—" subtitle="Total sales (INR)" />
+              <MetricCard title="Orders" value="—" subtitle="Number of orders" />
+              <MetricCard title="Items Sold" value="—" subtitle="Line items sold" />
+              <MetricCard title="Avg. Order Value" value="—" subtitle="INR per order" />
+            </div>
+            <p className="mt-3 text-xs text-wood/50">
+              Values are intentionally empty until sales data is uploaded. No
+              figures are invented.
+            </p>
+          </>
+        )}
       </section>
 
       {/* Add/edit product dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{editingId ? "Edit Product" : "Add Product"}</DialogTitle>
+            <DialogTitle>
+              {editingId ? "Edit Product" : "Add Product"}
+            </DialogTitle>
             <DialogDescription>
               Current selling price is in INR. Historical transaction prices are
               tracked separately and are not changed here.
@@ -516,7 +654,7 @@ export default function Overview() {
               <Input
                 value={form.imageUrl}
                 onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
-                placeholder="https://â€¦"
+                placeholder="https://…"
               />
               <p className="text-xs text-wood/50">
                 Optional. Leave blank to show a default placeholder.
@@ -557,5 +695,3 @@ function UploadIcon({ className }: { className?: string }) {
     </svg>
   )
 }
-
-

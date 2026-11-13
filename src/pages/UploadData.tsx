@@ -1,14 +1,10 @@
-﻿import { useState, useCallback, useEffect } from "react"
+﻿// Mist & Mug — Sales Dashboard
+// Upload Data page: file import with validation preview and past uploads history.
+
+import { useState, useCallback, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
-import {
-  Upload,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-} from "lucide-react"
+import { Upload, CheckCircle2, AlertCircle, Loader2, Trash2 } from "lucide-react"
 import { Button } from "../components/ui/button"
-import { Label } from "../components/ui/label"
-import { Separator } from "../components/ui/separator"
 import { Card, CardContent } from "../components/ui/card"
 import {
   Table,
@@ -18,21 +14,14 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table"
-import {
-  EMPTY_ICONS,
-  EmptyState,
-} from "../components/common/EmptyState"
+import { ImportDialog } from "../components/import/ImportDialog"
 import { db } from "../lib/db"
-import { cn } from "../lib/utils"
 import type { UploadBatch } from "../types"
-
-const ACCEPTED_EXTENSIONS = [".csv", ".xlsx", ".xls"]
+import { cn } from "../lib/utils"
 
 export default function UploadData() {
   const navigate = useNavigate()
-  const [file, setFile] = useState<File | null>(null)
-  const [dragActive, setDragActive] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   const [pastUploads, setPastUploads] = useState<UploadBatch[]>([])
   const [uploadsLoading, setUploadsLoading] = useState(true)
@@ -54,48 +43,45 @@ export default function UploadData() {
     void loadPastUploads()
   }, [loadPastUploads])
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragActive(true)
-  }
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragActive(false)
-  }
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragActive(false)
-    const f = e.dataTransfer.files[0]
-    if (f) setFile(f)
-  }
+  const handleImportComplete = useCallback(() => {
+    setImportDialogOpen(false)
+    void loadPastUploads()
+  }, [loadPastUploads])
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFile(e.target.files?.[0] || null)
-  }
-
-  const isAccepted = (f: File | null) =>
-    !!f &&
-    ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))
-
-  const handleImport = async () => {
-    if (!file) return
-    if (!isAccepted(file)) {
-      window.alert("Please upload a CSV or Excel file.")
-      return
-    }
-    setSubmitting(true)
-    // Short delay so the "unavailable" state is readable
-    await new Promise((r) => setTimeout(r, 1200))
-    setSubmitting(false)
-    window.alert(
-      "Importing is not yet available in Phase 1. The file was read locally but not persisted. File importing lands in Phase 2."
+  const handleRemoveBatch = async (batchId: string) => {
+    if (
+      !window.confirm(
+        `Remove this upload batch? This will delete all transaction lines from this import. This cannot be undone.`
+      )
     )
+      return
+
+    try {
+      await db.transaction("rw", db.transactionLines, db.uploadBatches, async () => {
+        await db.transactionLines.where("uploadBatchId").equals(batchId).delete()
+        await db.uploadBatches.delete(batchId)
+      })
+      void loadPastUploads()
+    } catch (err) {
+      window.alert(
+        `Failed to remove batch: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
   }
 
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  const statusColor = (status: string) => {
+    switch (status) {
+      case "imported":
+        return "bg-forest/10 text-forest"
+      case "failed":
+        return "bg-brick/10 text-brick"
+      case "review":
+        return "bg-wood/10 text-wood"
+      case "pending":
+        return "bg-wood/10 text-wood"
+      default:
+        return "bg-wood/10 text-wood"
+    }
   }
 
   return (
@@ -106,114 +92,27 @@ export default function UploadData() {
             Upload Data
           </h1>
           <p className="mt-1 text-sm text-wood/60">
-            Upload weekly sales files (CSV or Excel). Importing is unavailable
-            until Phase 2.
+            Upload weekly sales files (CSV or Excel). Imported data powers
+            Sales Analytics and Performance Tracker.
           </p>
         </div>
-        <Button onClick={() => navigate("/overview")} variant="outline">
-          Back to Overview
-        </Button>
+        <div className="flex gap-3">
+          <Button onClick={() => navigate("/overview")} variant="outline">
+            Back to Overview
+          </Button>
+          <Button onClick={() => setImportDialogOpen(true)}>
+            <Upload className="h-4 w-4 mr-2" aria-hidden="true" />
+            Import Weekly Sales
+          </Button>
+        </div>
       </div>
 
-      {/* Upload zone */}
-      <Card className="border-border">
-        <CardContent className="p-8">
-          <div className="flex flex-col items-center gap-4">
-            <div
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              className={cn(
-                "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition-colors w-full max-w-md",
-                dragActive
-                  ? "bg-gold/10 border-gold"
-                  : "bg-cream border-border hover:bg-gold/5"
-              )}
-            >
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-forest/10 text-forest mb-3">
-                <Upload className="h-7 w-7" aria-hidden="true" />
-              </div>
-              <p className="font-serif font-semibold text-ink">
-                {dragActive ? "Drop file here" : "Drop a sales file here"}
-              </p>
-              <p className="text-xs text-wood/60">
-                CSV Â· XLSX Â· XLS
-              </p>
-              <Button
-                onClick={() => document.getElementById("file-input")?.click()}
-                variant="default"
-              >
-                Browse files
-              </Button>
-              <input
-                id="file-input"
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-            </div>
-
-            <Separator className="w-full" />
-
-            <div className="w-full max-w-md space-y-1">
-              <Label htmlFor="validation-summary">Validation summary</Label>
-              <div
-                id="validation-summary"
-                className="rounded-lg border border-border bg-cream/50 p-3 text-sm"
-              >
-                {file ? (
-                  <div className="space-y-2">
-                    <p className="text-ink/80">
-                      {isAccepted(file) ? "File accepted" : "Unsupported file type"}
-                    </p>
-                    <p className="text-xs text-wood/60">
-                      {file.name} â€¢ {formatSize(file.size)} â€¢{" "}
-                      {file.type || "unknown type"}
-                    </p>
-                    {!isAccepted(file) && (
-                      <p className="text-xs text-brick">
-                        Only .csv, .xlsx and .xls files can be imported.
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-xs text-wood/50">
-                    No file selected. Drag a CSV/Excel file onto the zone or browse.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-6 flex items-center justify-center gap-3">
-              <Button
-                onClick={handleImport}
-                disabled={!file || !isAccepted(file) || submitting}
-                className="w-full sm:w-auto"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" aria-hidden="true" />
-                    Reading fileâ€¦
-                  </>
-                ) : (
-                  "Import file"
-                )}
-              </Button>
-              <Button
-                onClick={() => setFile(null)}
-                variant="outline"
-                disabled={!file || submitting}
-              >
-                Clear
-              </Button>
-              <p className="text-xs text-wood/50">
-                Importing is disabled until Phase 2.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Import dialog */}
+      <ImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onImportComplete={handleImportComplete}
+      />
 
       {/* Past Uploads */}
       <section>
@@ -223,7 +122,7 @@ export default function UploadData() {
               Past Uploads
             </h2>
             <p className="mt-1 text-sm text-wood/60">
-              Import history appears here after files are processed.
+              Import history with validation summaries.
             </p>
           </div>
         </div>
@@ -242,29 +141,44 @@ export default function UploadData() {
                     <TableHead className="text-left px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
                       Period
                     </TableHead>
+                    <TableHead className="text-center px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                      Accepted
+                    </TableHead>
+                    <TableHead className="text-center px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                      Rejected
+                    </TableHead>
+                    <TableHead className="text-center px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
+                      Duplicates
+                    </TableHead>
                     <TableHead className="text-right px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
                       Status
                     </TableHead>
                     <TableHead className="text-right px-4 py-3 text-wood/70 font-semibold uppercase text-xs">
-                      Records
+                      Actions
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {uploadsLoading ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="h-32 flex items-center justify-center">
+                      <TableCell colSpan={8} className="h-32 flex items-center justify-center">
                         <Loader2 className="h-5 w-5 animate-spin text-wood" aria-hidden="true" />
                       </TableCell>
                     </TableRow>
                   ) : pastUploads.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="h-24 text-center">
-                        <EmptyState
-                          icon={EMPTY_ICONS.upload}
-                          title="No uploads yet"
-                          description="Uploaded files will appear here with their status and record counts."
-                        />
+                      <TableCell colSpan={8} className="h-24 text-center">
+                        <div className="flex flex-col items-center justify-center py-12 text-center">
+                          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-cream border border-border text-wood mb-3">
+                            <Upload className="h-6 w-6" aria-hidden="true" />
+                          </div>
+                          <h3 className="mt-4 text-lg font-serif font-semibold text-ink">
+                            No uploads yet
+                          </h3>
+                          <p className="mt-1 text-sm text-wood/70 max-w-xs">
+                            Imported files will appear here with their status and record counts.
+                          </p>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -277,17 +191,22 @@ export default function UploadData() {
                           {new Date(batch.uploadedAt).toLocaleString()}
                         </TableCell>
                         <TableCell className="px-4 py-3 text-ink/80 text-sm">
-                          {batch.reportingPeriodLabel || "â€”"}
+                          {batch.reportingPeriodLabel || "—"}
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-center text-ink/80 text-sm">
+                          {batch.acceptedRows}
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-center text-ink/80 text-sm">
+                          {batch.rejectedRows}
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-center text-ink/80 text-sm">
+                          {batch.duplicateRows}
                         </TableCell>
                         <TableCell className="px-4 py-3">
                           <span
                             className={cn(
                               "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold",
-                              batch.status === "imported"
-                                ? "bg-forest/10 text-forest"
-                                : batch.status === "failed"
-                                ? "bg-brick/10 text-brick"
-                                : "bg-wood/10 text-wood"
+                              statusColor(batch.status)
                             )}
                           >
                             {batch.status === "imported" ? (
@@ -298,8 +217,16 @@ export default function UploadData() {
                             {batch.status}
                           </span>
                         </TableCell>
-                        <TableCell className="px-4 py-3 text-right text-ink/80 text-sm">
-                          {batch.recordsImported} / {batch.recordsParsed}
+                        <TableCell className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRemoveBatch(batch.id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))
@@ -312,11 +239,10 @@ export default function UploadData() {
       </section>
 
       <p className="mt-2 text-xs text-wood/50 max-w-2xl">
-        Actual importing is unavailable in Phase 1. No file is persisted and no
-        success messages are shown. Importing becomes functional in Phase 2.
+        All imported records are stored locally in IndexedDB and persist across
+        browser refreshes. Re-importing the same file will not double-count
+        revenue — duplicate transaction lines are detected and skipped.
       </p>
     </div>
   )
 }
-
-
