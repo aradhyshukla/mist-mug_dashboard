@@ -394,3 +394,317 @@ export async function loadLinesForPeriod(
 ): Promise<TransactionLine[]> {
   return db.transactionLines.where("date").between(startDate, endDate).toArray()
 }
+
+/** Calculate the percentage change from previous to current. */
+export function calculatePercentChange(
+  current: number,
+  previous: number
+): { changePercent: number | null; valid: boolean } {
+  if (previous > 0) {
+    return {
+      changePercent: ((current - previous) / previous) * 100,
+      valid: true,
+    }
+  }
+  return { changePercent: null, valid: false }
+}
+
+/** Compare current vs previous period for all KPI metrics. */
+export interface MetricComparison {
+  revenue: {
+    current: number
+    previous: number
+    absoluteDiff: number
+    changePercent: number | null
+    valid: boolean
+  }
+  orders: {
+    current: number
+    previous: number
+    absoluteDiff: number
+    changePercent: number | null
+    valid: boolean
+  }
+  itemsSold: {
+    current: number
+    previous: number
+    absoluteDiff: number
+    changePercent: number | null
+    valid: boolean
+  }
+  averageOrderValue: {
+    current: number
+    previous: number
+    absoluteDiff: number
+    changePercent: number | null
+    valid: boolean
+  }
+}
+
+export function calculateMetricComparison(
+  currentLines: TransactionLine[],
+  previousLines: TransactionLine[]
+): MetricComparison {
+  const current = calculateMetrics(currentLines)
+  const previous = calculateMetrics(previousLines)
+
+  const revenueDiff = current.revenue - previous.revenue
+  const ordersDiff = current.orders - previous.orders
+  const itemsDiff = current.itemsSold - previous.itemsSold
+  const aovDiff = current.averageOrderValue - previous.averageOrderValue
+
+  const revenuePct = calculatePercentChange(current.revenue, previous.revenue)
+  const ordersPct = calculatePercentChange(current.orders, previous.orders)
+  const itemsPct = calculatePercentChange(current.itemsSold, previous.itemsSold)
+  const aovPct = calculatePercentChange(
+    current.averageOrderValue,
+    previous.averageOrderValue
+  )
+
+  return {
+    revenue: {
+      current: current.revenue,
+      previous: previous.revenue,
+      absoluteDiff: revenueDiff,
+      changePercent: revenuePct.changePercent,
+      valid: revenuePct.valid,
+    },
+    orders: {
+      current: current.orders,
+      previous: previous.orders,
+      absoluteDiff: ordersDiff,
+      changePercent: ordersPct.changePercent,
+      valid: ordersPct.valid,
+    },
+    itemsSold: {
+      current: current.itemsSold,
+      previous: previous.itemsSold,
+      absoluteDiff: itemsDiff,
+      changePercent: itemsPct.changePercent,
+      valid: itemsPct.valid,
+    },
+    averageOrderValue: {
+      current: current.averageOrderValue,
+      previous: previous.averageOrderValue,
+      absoluteDiff: aovDiff,
+      changePercent: aovPct.changePercent,
+      valid: aovPct.valid,
+    },
+  }
+}
+
+/** Product comparison between current and previous periods. */
+export interface ProductComparison {
+  productName: string
+  category: string
+  currentRevenue: number
+  previousRevenue: number
+  revenueChange: number
+  revenueChangePercent: number | null
+  currentQuantity: number
+  previousQuantity: number
+  quantityChange: number
+  quantityChangePercent: number | null
+  currentOrders: number
+  previousOrders: number
+}
+
+export function getProductComparison(
+  currentLines: TransactionLine[],
+  previousLines: TransactionLine[]
+): ProductComparison[] {
+  const currentByProduct = aggregateByProduct(currentLines)
+  const previousByProduct = aggregateByProduct(previousLines)
+
+  const allProductNames = new Set([
+    ...Array.from(currentByProduct.keys()),
+    ...Array.from(previousByProduct.keys()),
+  ])
+
+  const results: ProductComparison[] = Array.from(allProductNames).map(
+    (name) => {
+      const cur = currentByProduct.get(name) || {
+        revenue: 0,
+        quantity: 0,
+        orders: 0,
+        category: "",
+      }
+      const prev = previousByProduct.get(name) || {
+        revenue: 0,
+        quantity: 0,
+        orders: 0,
+        category: "",
+      }
+      const category = cur.category || prev.category || "Uncategorised"
+
+      const revenueChange = cur.revenue - prev.revenue
+      const quantityChange = cur.quantity - prev.quantity
+
+      const revenuePct = calculatePercentChange(cur.revenue, prev.revenue)
+      const quantityPct = calculatePercentChange(cur.quantity, prev.quantity)
+
+      return {
+        productName: name,
+        category,
+        currentRevenue: cur.revenue,
+        previousRevenue: prev.revenue,
+        revenueChange,
+        revenueChangePercent: revenuePct.changePercent,
+        currentQuantity: cur.quantity,
+        previousQuantity: prev.quantity,
+        quantityChange,
+        quantityChangePercent: quantityPct.changePercent,
+        currentOrders: cur.orders,
+        previousOrders: prev.orders,
+      }
+    }
+  )
+
+  return results
+}
+
+/** Category comparison between current and previous periods. */
+export interface CategoryComparison {
+  category: string
+  currentRevenue: number
+  previousRevenue: number
+  revenueChange: number
+  revenueChangePercent: number | null
+  currentQuantity: number
+  previousQuantity: number
+  quantityChange: number
+  quantityChangePercent: number | null
+  currentOrders: number
+  previousOrders: number
+}
+
+export function getCategoryComparison(
+  currentLines: TransactionLine[],
+  previousLines: TransactionLine[]
+): CategoryComparison[] {
+  const currentByCategory = aggregateByCategory(currentLines)
+  const previousByCategory = aggregateByCategory(previousLines)
+
+  const allCategories = new Set([
+    ...Array.from(currentByCategory.keys()),
+    ...Array.from(previousByCategory.keys()),
+  ])
+
+  const results: CategoryComparison[] = Array.from(allCategories).map(
+    (cat) => {
+      const cur = currentByCategory.get(cat) || {
+        revenue: 0,
+        quantity: 0,
+        orders: 0,
+      }
+      const prev = previousByCategory.get(cat) || {
+        revenue: 0,
+        quantity: 0,
+        orders: 0,
+      }
+
+      const revenueChange = cur.revenue - prev.revenue
+      const quantityChange = cur.quantity - prev.quantity
+
+      const revenuePct = calculatePercentChange(cur.revenue, prev.revenue)
+      const quantityPct = calculatePercentChange(cur.quantity, prev.quantity)
+
+      return {
+        category: cat,
+        currentRevenue: cur.revenue,
+        previousRevenue: prev.revenue,
+        revenueChange,
+        revenueChangePercent: revenuePct.changePercent,
+        currentQuantity: cur.quantity,
+        previousQuantity: prev.quantity,
+        quantityChange,
+        quantityChangePercent: quantityPct.changePercent,
+        currentOrders: cur.orders,
+        previousOrders: prev.orders,
+      }
+    }
+  )
+
+  return results
+}
+
+/** Internal helper: aggregate transaction lines by product. */
+function aggregateByProduct(
+  lines: TransactionLine[]
+): Map<
+  string,
+  { revenue: number; quantity: number; orders: number; category: string }
+> {
+  const byProduct = new Map<
+    string,
+    { revenue: number; quantity: number; orders: Set<string>; category: string }
+  >()
+
+  for (const l of lines) {
+    const existing =
+      byProduct.get(l.productName) || {
+        revenue: 0,
+        quantity: 0,
+        orders: new Set<string>(),
+        category: l.category,
+      }
+    existing.revenue += l.lineTotal
+    existing.quantity += l.quantity
+    existing.orders.add(l.transactionId)
+    existing.category = l.category
+    byProduct.set(l.productName, existing)
+  }
+
+  const result = new Map<
+    string,
+    { revenue: number; quantity: number; orders: number; category: string }
+  >()
+  for (const [name, data] of byProduct.entries()) {
+    result.set(name, {
+      revenue: data.revenue,
+      quantity: data.quantity,
+      orders: data.orders.size,
+      category: data.category,
+    })
+  }
+  return result
+}
+
+/** Internal helper: aggregate transaction lines by category. */
+function aggregateByCategory(
+  lines: TransactionLine[]
+): Map<
+  string,
+  { revenue: number; quantity: number; orders: number }
+> {
+  const byCategory = new Map<
+    string,
+    { revenue: number; quantity: number; orders: Set<string> }
+  >()
+
+  for (const l of lines) {
+    const existing =
+      byCategory.get(l.category) || {
+        revenue: 0,
+        quantity: 0,
+        orders: new Set<string>(),
+      }
+    existing.revenue += l.lineTotal
+    existing.quantity += l.quantity
+    existing.orders.add(l.transactionId)
+    byCategory.set(l.category, existing)
+  }
+
+  const result = new Map<
+    string,
+    { revenue: number; quantity: number; orders: number }
+  >()
+  for (const [cat, data] of byCategory.entries()) {
+    result.set(cat, {
+      revenue: data.revenue,
+      quantity: data.quantity,
+      orders: data.orders.size,
+    })
+  }
+  return result
+}

@@ -1,8 +1,9 @@
 ﻿// Mist & Mug — Sales Dashboard
-// Performance Tracker page: real metrics and charts from imported data.
+// Performance Tracker page: period-over-period comparison with metrics, charts, and tables.
 
 import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
+import { Upload } from "lucide-react"
 import { Button } from "../components/ui/button"
 import {
   Tabs,
@@ -11,10 +12,26 @@ import {
 } from "../components/ui/tabs"
 import { Card } from "../components/ui/card"
 import { SectionHeader } from "../components/common/SectionHeader"
-import { MetricCard } from "../components/common/MetricCard"
+import {
+  ComparisonMetricCard,
+} from "../components/analytics/ComparisonMetricCard"
+import { ComparisonChart } from "../components/analytics/ComparisonChart"
+import { ProductComparisonTable } from "../components/analytics/ProductComparisonTable"
+import { CategoryComparisonTable } from "../components/analytics/CategoryComparisonTable"
 import { useAnalytics } from "../hooks/useAnalytics"
-import { loadAllLines } from "../lib/analytics"
-import { getWeekStart, getMonthEnd, getAvailableYears } from "../lib/date-utils"
+import {
+  loadAllLines,
+  loadLinesForPeriod,
+  calculateMetricComparison,
+  getProductComparison,
+  getCategoryComparison,
+} from "../lib/analytics"
+import {
+  getWeekStart,
+  getMonthEnd,
+  getAvailableYears,
+  getPreviousPeriodDates,
+} from "../lib/date-utils"
 import type { ReportingPeriodType } from "../types"
 
 const PERIODS: Array<{ value: ReportingPeriodType; label: string }> = [
@@ -22,13 +39,6 @@ const PERIODS: Array<{ value: ReportingPeriodType; label: string }> = [
   { value: "month", label: "Month" },
   { value: "year", label: "Year" },
   { value: "alltime", label: "All Time" },
-]
-
-const METRICS = [
-  { title: "Total Revenue", key: "revenue" },
-  { title: "Unique Orders", key: "orders" },
-  { title: "Items Sold", key: "itemsSold" },
-  { title: "Avg. Order Value", key: "aov" },
 ]
 
 export default function PerformanceTracker() {
@@ -46,6 +56,7 @@ export default function PerformanceTracker() {
     startDate: string
     endDate: string
   } | null>(null)
+  const [showComparison, setShowComparison] = useState(true)
 
   // Load all lines to determine available dates and generate period options
   useEffect(() => {
@@ -127,11 +138,86 @@ export default function PerformanceTracker() {
   const startDate = selectedOption?.startDate ?? ""
   const endDate = selectedOption?.endDate ?? ""
 
+  // Previous period dates for comparison
+  const prevPeriod = showComparison
+    ? getPreviousPeriodDates(period, startDate, endDate)
+    : null
+
   const {
     loading,
     error,
     metrics,
   } = useAnalytics({ type: period, startDate, endDate })
+
+  // Load previous period data for comparison
+  const [prevMetrics, setPrevMetrics] = useState<{
+    revenue: number
+    orders: number
+    itemsSold: number
+    averageOrderValue: number
+  } | null>(null)
+  const [prevProductComparison, setPrevProductComparison] = useState<
+    ReturnType<typeof getProductComparison>
+  >([])
+  const [prevCategoryComparison, setPrevCategoryComparison] = useState<
+    ReturnType<typeof getCategoryComparison>
+  >([])
+  const [comparisonLoading, setComparisonLoading] = useState(false)
+
+  useEffect(() => {
+    let mounted = true
+    const loadComparison = async () => {
+      if (!showComparison || !prevPeriod) {
+        setPrevMetrics(null)
+        setPrevProductComparison([])
+        setPrevCategoryComparison([])
+        return
+      }
+      setComparisonLoading(true)
+      try {
+        const prevLines = await loadLinesForPeriod(
+          prevPeriod.startDate,
+          prevPeriod.endDate
+        )
+        const currLines = await loadLinesForPeriod(startDate, endDate)
+
+        const comparison = calculateMetricComparison(currLines, prevLines)
+        const productComp = getProductComparison(currLines, prevLines)
+        const categoryComp = getCategoryComparison(currLines, prevLines)
+
+        if (!mounted) return
+        setPrevMetrics({
+          revenue: comparison.revenue.previous,
+          orders: comparison.orders.previous,
+          itemsSold: comparison.itemsSold.previous,
+          averageOrderValue: comparison.averageOrderValue.previous,
+        })
+        setPrevProductComparison(productComp)
+        setPrevCategoryComparison(categoryComp)
+      } catch (err) {
+        console.error("Failed to load comparison data:", err)
+      } finally {
+        if (mounted) setComparisonLoading(false)
+      }
+    }
+    void loadComparison()
+    return () => {
+      mounted = false
+    }
+  }, [showComparison, prevPeriod, startDate, endDate])
+
+  const computeChangePercent = (
+    _current: number,
+    previous: number
+  ): number | null => {
+    if (previous > 0) return ((_current - previous) / previous) * 100
+    return null
+  }
+
+  const computeValid = (
+    _current: number,
+    previous: number
+  ): boolean => previous > 0
 
   return (
     <div className="space-y-8 p-6 md:p-8 lg:p-10 max-w-7xl mx-auto">
@@ -145,9 +231,15 @@ export default function PerformanceTracker() {
             sales data.
           </p>
         </div>
-        <Button onClick={() => navigate("/upload-data")} variant="outline">
-          Upload Sales Data
-        </Button>
+        <div className="flex gap-3">
+          <Button onClick={() => navigate("/overview")} variant="outline">
+            Back to Overview
+          </Button>
+          <Button onClick={() => navigate("/upload-data")} variant="outline">
+            <Upload className="h-4 w-4 mr-2" aria-hidden="true" />
+            Upload Sales Data
+          </Button>
+        </div>
       </div>
 
       {/* Period selector */}
@@ -192,7 +284,28 @@ export default function PerformanceTracker() {
         </div>
       )}
 
-      {loading ? (
+      {/* Comparison toggle */}
+      {period !== "alltime" && periodOptions.length > 0 && (
+        <div className="flex items-center gap-3 pb-2">
+          <button
+            onClick={() => setShowComparison((s) => !s)}
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors border ${
+              showComparison
+                ? "bg-forest text-cream border-forest"
+                : "bg-cream text-wood border-border hover:bg-wood/10"
+            }`}
+          >
+            {showComparison ? "▾" : "▸"} Compare with previous period
+          </button>
+          {showComparison && prevPeriod && (
+            <span className="text-xs text-wood/60">
+              Previous: {prevPeriod.startDate} to {prevPeriod.endDate}
+            </span>
+          )}
+        </div>
+      )}
+
+      {loading || comparisonLoading ? (
         <div className="flex h-96 items-center justify-center">
           <p className="text-sm text-wood/60">Loading performance data…</p>
         </div>
@@ -207,40 +320,133 @@ export default function PerformanceTracker() {
             description="All figures are calculated from imported transaction data using actual historical prices."
           />
 
+          {/* KPI Comparison Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {METRICS.map((m) => {
-              let value = "—"
-              let subtitle = "No sales data yet"
-              if (metrics) {
-                switch (m.key) {
-                  case "revenue":
-                    value = `₹${metrics.revenue.toLocaleString()}`
-                    subtitle = "INR · selected period"
-                    break
-                  case "orders":
-                    value = metrics.orders.toLocaleString()
-                    subtitle = "Unique transactions"
-                    break
-                  case "itemsSold":
-                    value = metrics.itemsSold.toLocaleString()
-                    subtitle = "Line items sold"
-                    break
-                  case "aov":
-                    value = `₹${metrics.averageOrderValue.toLocaleString()}`
-                    subtitle = "Revenue ÷ orders"
-                    break
-                }
+            <ComparisonMetricCard
+              title="Total Revenue"
+              current={metrics?.revenue ?? 0}
+              previous={prevMetrics?.revenue ?? 0}
+              absoluteDiff={
+                metrics ? metrics.revenue - (prevMetrics?.revenue ?? 0) : 0
               }
-              return (
-                <MetricCard
-                  key={m.key}
-                  title={m.title}
-                  value={value}
-                  subtitle={subtitle}
-                />
-              )
-            })}
+              changePercent={computeChangePercent(
+                metrics?.revenue ?? 0,
+                prevMetrics?.revenue ?? 0
+              )}
+              valid={computeValid(
+                metrics?.revenue ?? 0,
+                prevMetrics?.revenue ?? 0
+              )}
+              format="currency"
+              subtitle="INR · selected period"
+            />
+            <ComparisonMetricCard
+              title="Unique Orders"
+              current={metrics?.orders ?? 0}
+              previous={prevMetrics?.orders ?? 0}
+              absoluteDiff={
+                metrics ? metrics.orders - (prevMetrics?.orders ?? 0) : 0
+              }
+              changePercent={computeChangePercent(
+                metrics?.orders ?? 0,
+                prevMetrics?.orders ?? 0
+              )}
+              valid={computeValid(
+                metrics?.orders ?? 0,
+                prevMetrics?.orders ?? 0
+              )}
+              format="number"
+              subtitle="Unique transactions"
+            />
+            <ComparisonMetricCard
+              title="Items Sold"
+              current={metrics?.itemsSold ?? 0}
+              previous={prevMetrics?.itemsSold ?? 0}
+              absoluteDiff={
+                metrics
+                  ? metrics.itemsSold - (prevMetrics?.itemsSold ?? 0)
+                  : 0
+              }
+              changePercent={computeChangePercent(
+                metrics?.itemsSold ?? 0,
+                prevMetrics?.itemsSold ?? 0
+              )}
+              valid={computeValid(
+                metrics?.itemsSold ?? 0,
+                prevMetrics?.itemsSold ?? 0
+              )}
+              format="number"
+              subtitle="Line items sold"
+            />
+            <ComparisonMetricCard
+              title="Avg. Order Value"
+              current={metrics?.averageOrderValue ?? 0}
+              previous={prevMetrics?.averageOrderValue ?? 0}
+              absoluteDiff={
+                metrics
+                  ? metrics.averageOrderValue -
+                    (prevMetrics?.averageOrderValue ?? 0)
+                  : 0
+              }
+              changePercent={computeChangePercent(
+                metrics?.averageOrderValue ?? 0,
+                prevMetrics?.averageOrderValue ?? 0
+              )}
+              valid={computeValid(
+                metrics?.averageOrderValue ?? 0,
+                prevMetrics?.averageOrderValue ?? 0
+              )}
+              format="currency"
+              subtitle="Revenue ÷ orders"
+            />
           </div>
+
+          {/* Comparison Charts */}
+          {showComparison && (
+            <SectionHeader
+              title="Period Comparison"
+              description="Current period vs previous comparable period."
+            />
+          )}
+          <div className="grid gap-4 md:grid-cols-2">
+            <ComparisonChart
+              title="Revenue Comparison"
+              currentValue={metrics?.revenue ?? 0}
+              previousValue={prevMetrics?.revenue ?? 0}
+              currentLabel="Current"
+              previousLabel="Previous"
+              emptyMessage="No revenue data for comparison."
+            />
+            <ComparisonChart
+              title="Order Volume Comparison"
+              currentValue={metrics?.orders ?? 0}
+              previousValue={prevMetrics?.orders ?? 0}
+              currentLabel="Current"
+              previousLabel="Previous"
+              valueFormatter={(v) => `${Math.round(v)} orders`}
+              emptyMessage="No order data for comparison."
+            />
+          </div>
+
+          {/* Product Performance Changes */}
+          <SectionHeader
+            title="Product Performance Changes"
+            description="Products ranked by absolute revenue change between periods."
+          />
+          <ProductComparisonTable
+            data={prevProductComparison}
+            title="Product Revenue Changes"
+          />
+
+          {/* Category Performance Changes */}
+          <SectionHeader
+            title="Category Performance Changes"
+            description="Categories ranked by absolute revenue change between periods."
+          />
+          <CategoryComparisonTable
+            data={prevCategoryComparison}
+            title="Category Revenue Changes"
+          />
 
           <p className="mt-6 text-xs text-wood/50 max-w-2xl">
             Metric cards remain empty until sales data is uploaded. No figures

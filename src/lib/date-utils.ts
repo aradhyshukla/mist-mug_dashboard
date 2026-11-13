@@ -332,3 +332,42 @@ export function generateReportingPeriods(
 
   return periods
 }
+
+/** Add N days to a date string (YYYY-MM-DD), return YYYY-MM-DD. */
+export function addDays(dateStr: string, days: number): string {
+  const d = parseDate(dateStr)
+  if (!d) return dateStr
+  return formatDate(new Date(d.getTime() + days * 24 * 60 * 60 * 1000))
+}
+
+/** Subtract N days from a date string (YYYY-MM-DD), return YYYY-MM-DD. */
+export function subtractDays(dateStr: string, days: number): string {
+  return addDays(dateStr, -days)
+}
+
+/**
+ * Get the previous comparable period dates for a given period.
+ * - Week: previous 7-day window ending the day before current start
+ * - Month: same number of days, ending the day before current start
+ * - Year: same number of days, ending the day before current start
+ * - All Time: no previous period
+ */
+export function getPreviousPeriodDates(
+  type: "week" | "month" | "year" | "alltime",
+  startDate: string,
+  endDate: string
+): { startDate: string; endDate: string } | null {
+  if (type === "alltime") return null
+
+  const end = subtractDays(startDate, 1) // day before current period starts
+
+  // Calculate the length of the current period in days
+  const currentStart = new Date(startDate)
+  const currentEnd = new Date(endDate)
+  const periodDays =
+    Math.round((currentEnd.getTime() - currentStart.getTime()) / (24 * 60 * 60 * 1000)) + 1
+
+  const prevStart = subtractDays(end, periodDays - 1)
+
+  return { startDate: prevStart, endDate: end }
+}
