@@ -19,6 +19,17 @@ export function parseDate(value: string | number | undefined): Date | null {
   const str = String(value).trim()
   if (!str) return null
 
+  // Try Excel serial date from string (e.g., "46328" from SheetJS String() conversion)
+  const serialStrMatch = str.match(/^(\d{1,5}(\.\d+)?)$/)
+  if (serialStrMatch) {
+    const serial = Number(serialStrMatch[1])
+    // Excel serial dates are positive integers typically in range 1 to 2958465
+    if (serial >= 1 && serial <= 2958465 && Number.isInteger(serial)) {
+      const date = excelSerialToDate(serial)
+      if (date) return date
+    }
+  }
+
   // Try ISO format first (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss)
   const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/)
   if (isoMatch) {
@@ -74,7 +85,7 @@ export function parseDate(value: string | number | undefined): Date | null {
 }
 
 /** Convert Excel serial date to a local Date. */
-function excelSerialToDate(serial: number): Date | null {
+export function excelSerialToDate(serial: number): Date | null {
   // Excel epoch: 1899-12-30
   const excelEpoch = new Date(1899, 11, 30)
   const ms = excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000
@@ -85,7 +96,7 @@ function excelSerialToDate(serial: number): Date | null {
 
 /** Check that a Date is valid and not the invalid date. */
 function isValidLocalDate(date: Date): boolean {
-  return !isNaN(date.getTime()) && date.getFullYear() > 1900
+  return !isNaN(date.getTime()) && date.getFullYear() >= 1900
 }
 
 /** Format a Date as YYYY-MM-DD (local date, no timezone shift). */

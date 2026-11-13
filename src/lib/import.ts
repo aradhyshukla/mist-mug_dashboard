@@ -19,8 +19,9 @@ import type {
 import { COLUMN_ALIASES } from "../types"
 import {
   parseDate,
-  combineDateTime,
   parseISOToDateString,
+  formatDate,
+  excelSerialToDate,
 } from "./date-utils"
 import { db } from "./db"
 
@@ -88,36 +89,7 @@ function readXlsx(file: File): Promise<{ headers: string[]; rows: RawRow[] }> {
     reader.onload = (e) => {
       try {
         const arrayBuffer = e.target?.result as ArrayBuffer
-        const workbook = XLSX.read(arrayBuffer, { type: "array" })
-        const sheetName = workbook.SheetNames[0]
-        const worksheet = workbook.Sheets[sheetName]
-        const json = XLSX.utils.sheet_to_json(worksheet, {
-          header: 1,
-          blankrows: false,
-        }) as unknown[][]
-
-        if (json.length === 0) {
-          resolve({ headers: [], rows: [] })
-          return
-        }
-
-        const headerRow = json[0] as (string | undefined)[]
-        const headers = headerRow.map((h) => (h ?? "").toString().trim())
-
-        const rows: RawRow[] = []
-        for (let i = 1; i < json.length; i++) {
-          const rowValues = json[i] as (string | number | undefined)[]
-          const row: RawRow = { _row: i + 2 }
-          for (let j = 0; j < headers.length; j++) {
-            const colName = headers[j]
-            if (colName) {
-              row[colName] = rowValues[j]
-            }
-          }
-          rows.push(row)
-        }
-
-        resolve({ headers, rows })
+        resolve(parseXlsxBuffer(arrayBuffer))
       } catch (err) {
         reject(
           new Error(
@@ -129,6 +101,56 @@ function readXlsx(file: File): Promise<{ headers: string[]; rows: RawRow[] }> {
     reader.onerror = () => reject(new Error("Failed to read file"))
     reader.readAsArrayBuffer(file)
   })
+}
+
+/**
+ * Parse an XLSX ArrayBuffer into headers and raw rows.
+ * Does not use FileReader — safe to call from Node.js.
+ */
+export function parseXlsxBuffer(
+  arrayBuffer: ArrayBuffer
+): { headers: string[]; rows: RawRow[] } {
+  const workbook = XLSX.read(arrayBuffer, { type: "array" })
+  const sheetName = workbook.SheetNames[0]
+  const worksheet = workbook.Sheets[sheetName]
+  const json = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    blankrows: false,
+  }) as unknown[][]
+
+  if (json.length === 0) {
+    return { headers: [], rows: [] }
+  }
+
+  const headerRow = json[0] as (string | undefined)[]
+  const headers = headerRow.map((h) => (h ?? "").toString().trim())
+
+  const rows: RawRow[] = []
+  for (let i = 1; i < json.length; i++) {
+    const rowValues = json[i] as (string | number | undefined)[]
+    const row: RawRow = { _row: i + 2 }
+    for (let j = 0; j < headers.length; j++) {
+      const colName = headers[j]
+      if (colName) {
+        let val = rowValues[j]
+        // Convert Excel serial dates (numbers with date number format) to ISO strings
+        if (typeof val === "number") {
+          const cellRef = XLSX.utils.encode_cell({ r: i, c: j })
+          const cell = worksheet[cellRef]
+          if (cell && cell.t === "n" && cell.z && /[mdy]/i.test(cell.z)) {
+            const date = excelSerialToDate(val)
+            if (date) {
+              val = formatDate(date)
+            }
+          }
+        }
+        row[colName] = val
+      }
+    }
+    rows.push(row)
+  }
+
+  return { headers, rows }
 }
 
 /** Normalize a header name: lowercase, trim, replace spaces/underscores/dashes. */
@@ -252,8 +274,9 @@ export function validateMappedRow(
     if (!parsed) {
       errors.push(`Invalid date: ${row.date}`)
     } else {
-      const timePart = row.time ? String(row.time).trim() : ""
-      occurredAt = combineDateTime(row.date, timePart)
+      const datePart = formatDate(parsed)
+      const timePart = row.time ? String(row.time).trim() : "00:00:00"
+      occurredAt = `${datePart}T${timePart}`
     }
   } else {
     errors.push("date is missing or empty")
