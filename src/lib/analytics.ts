@@ -14,6 +14,9 @@ import type {
   CategoryPerformance,
   WeekdayWeekendComparison,
   PerformanceComparison,
+  Product,
+  UploadBatch,
+  Settings,
 } from "../types"
 import {
   isWeekend,
@@ -707,4 +710,159 @@ function aggregateByCategory(
     })
   }
   return result
+}
+
+/** CSV escape: wrap fields containing comma, quote, or newline in quotes. */
+export function csvEscape(value: string | number | boolean | undefined | null): string {
+  if (value === undefined || value === null) return ""
+  const s = String(value)
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  return s
+}
+
+/** Export transaction lines to CSV string. */
+export function exportTransactionsToCSV(
+  lines: TransactionLine[]
+): string {
+  const headers = [
+    "transaction_id",
+    "source_line_id",
+    "product_name",
+    "category",
+    "quantity",
+    "unit_price",
+    "line_total",
+    "occurred_at",
+    "date",
+    "hour",
+    "day_of_week",
+    "upload_batch_id",
+  ]
+  const rows = lines.map((l) => [
+    l.transactionId,
+    l.sourceLineId,
+    l.productName,
+    l.category,
+    l.quantity,
+    l.unitPrice,
+    l.lineTotal,
+    l.occurredAt,
+    l.date,
+    l.hour,
+    l.dayOfWeek,
+    l.uploadBatchId,
+  ])
+  return [headers, ...rows.map((r) => r.map(csvEscape).join(","))].join("\n")
+}
+
+/** Export product catalogue to CSV string. */
+export function exportProductsToCSV(products: Product[]): string {
+  const headers = [
+    "id",
+    "name",
+    "category",
+    "sku",
+    "description",
+    "current_price",
+    "image_url",
+    "is_active",
+    "created_at",
+    "updated_at",
+  ]
+  const rows = products.map((p) => [
+    p.id,
+    p.name,
+    p.category,
+    p.sku ?? "",
+    p.description ?? "",
+    p.currentPrice,
+    p.imageUrl ?? "",
+    p.isActive,
+    p.createdAt,
+    p.updatedAt,
+  ])
+  return [headers, ...rows.map((r) => r.map(csvEscape).join(","))].join("\n")
+}
+
+/** Export upload batches to CSV string. */
+export function exportUploadBatchesToCSV(batches: UploadBatch[]): string {
+  const headers = [
+    "id",
+    "file_name",
+    "file_size",
+    "uploaded_at",
+    "status",
+    "reporting_period_label",
+    "records_parsed",
+    "records_imported",
+    "accepted_rows",
+    "rejected_rows",
+    "duplicate_rows",
+    "earliest_transaction_date",
+    "latest_transaction_date",
+  ]
+  const rows = batches.map((b) => [
+    b.id,
+    b.fileName,
+    b.fileSize,
+    b.uploadedAt,
+    b.status,
+    b.reportingPeriodLabel ?? "",
+    b.recordsParsed,
+    b.recordsImported,
+    b.acceptedRows,
+    b.rejectedRows,
+    b.duplicateRows,
+    b.earliestTransactionDate ?? "",
+    b.latestTransactionDate ?? "",
+  ])
+  return [headers, ...rows.map((r) => r.map(csvEscape).join(","))].join("\n")
+}
+
+/** Download a string as a file. */
+export function downloadStringAsFile(
+  content: string,
+  fileName: string,
+  mimeType = "text/csv"
+): void {
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+/** Backup all application data to JSON string. */
+export function backupAllData(
+  products: Product[],
+  lines: TransactionLine[],
+  batches: UploadBatch[],
+  settings: Settings[]
+): string {
+  const backup = {
+    exportedAt: new Date().toISOString(),
+    version: "1.0",
+    products,
+    transactions: lines,
+    uploads: batches,
+    settings,
+  }
+  return JSON.stringify(backup, null, 2)
+}
+
+/** Import backup data from JSON. Returns parsed backup or null on failure. */
+export function importBackupFromJSON(json: string): any {
+  try {
+    const parsed = JSON.parse(json)
+    if (!parsed || !parsed.version) return null
+    return parsed
+  } catch {
+    return null
+  }
 }
